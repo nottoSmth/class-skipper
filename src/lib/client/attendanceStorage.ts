@@ -17,6 +17,82 @@ export function formatDateKey(year: number, month: number, day: number): string 
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
+/**
+ * Parses calendar date strings from Firebase properties.
+ * Handles both "YYYY-MM-DD" (e.g. "2026-10-15") and "YYYY-MM" (e.g. "2026-10").
+ * When isEnd = true and input is "YYYY-MM", defaults to the last day of that month.
+ */
+export function parseCalendarPropertyDate(
+  val: string | undefined,
+  defaultDate: Date,
+  isEnd = false
+): Date {
+  if (!val) return defaultDate;
+  const parts = val.trim().split("-").map((p) => parseInt(p, 10));
+  if (parts.length >= 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    return new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+  }
+  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+    const day = isEnd ? new Date(parts[0], parts[1], 0).getDate() : 1;
+    return new Date(parts[0], parts[1] - 1, day, 0, 0, 0, 0);
+  }
+  return defaultDate;
+}
+
+/**
+ * Returns a standardized "YYYY-MM-DD" dateKey from Firebase property strings.
+ */
+export function parseCalendarPropertyDateKey(
+  val: string | undefined,
+  defaultKey: string,
+  isEnd = false
+): string {
+  if (!val) return defaultKey;
+  const parts = val.trim().split("-").map((p) => parseInt(p, 10));
+  if (parts.length >= 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    return formatDateKey(parts[0], parts[1], parts[2]);
+  }
+  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+    const day = isEnd ? new Date(parts[0], parts[1], 0).getDate() : 1;
+    return formatDateKey(parts[0], parts[1], day);
+  }
+  return defaultKey;
+}
+
+const THAI_MONTH_SHORT_NAMES = [
+  "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
+];
+
+export function formatThaiDate(dateStr: string): string {
+  if (!dateStr) return "";
+  const parts = dateStr.trim().split("-").map((p) => parseInt(p, 10));
+  if (parts.length >= 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    const yearBe = parts[0] > 2400 ? parts[0] : parts[0] + 543;
+    const monthName = THAI_MONTH_SHORT_NAMES[parts[1] - 1] || "";
+    return `${parts[2]} ${monthName} ${yearBe}`;
+  }
+  return dateStr;
+}
+
+export function formatThaiDateRange(startStr: string, endStr: string): string {
+  const start = formatThaiDate(startStr);
+  const end = formatThaiDate(endStr);
+  if (!start && !end) return "";
+  if (!end) return start;
+  if (!start) return end;
+  return `${start} - ${end}`;
+}
+
+export function parseDateString(str: string): Date {
+  if (!str) return new Date();
+  const parts = str.trim().split("-").map((p) => parseInt(p, 10));
+  const year = parts[0] || new Date().getFullYear();
+  const month = parts[1] || 1;
+  const day = parts[2] || 1;
+  return new Date(year, month - 1, day, 0, 0, 0, 0);
+}
+
 export function getPeriodKey(dateKey: string, periodIndex: number): string {
   return `${dateKey}_p${periodIndex}`;
 }

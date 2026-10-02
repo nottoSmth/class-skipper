@@ -13,6 +13,8 @@ import {
   subscribeToAttendance,
   getDayAttendanceStatus,
   DayStatus,
+  parseCalendarPropertyDate,
+  parseCalendarPropertyDateKey,
 } from "@/lib/client/attendanceStorage";
 
 const MONTH_NAMES = [
@@ -142,8 +144,8 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
         if (!snap.exists()) return;
 
         const data = snap.data();
-        const startDate = new Date(`${data["start-calendar"]}-01`);
-        const endDate = new Date(`${data["end-calendar"]}-01`);
+        const startDate = parseCalendarPropertyDate(data["start-calendar"], new Date());
+        const endDate = parseCalendarPropertyDate(data["end-calendar"], new Date(), true);
 
         const startCalendar: Day = {
           year: startDate.getFullYear(),

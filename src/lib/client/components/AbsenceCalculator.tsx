@@ -8,6 +8,9 @@ import {
   getPeriodKey,
   getAttendanceMap,
   subscribeToAttendance,
+  parseCalendarPropertyDateKey,
+  parseDateString,
+  formatThaiDateRange,
 } from "@/lib/client/attendanceStorage";
 import {
   FaUserTie,
@@ -33,8 +36,8 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
   const [loading, setLoading] = useState(true);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, boolean>>({});
   const [dayOffMap, setDayOffMap] = useState<Record<string, boolean>>({});
-  const [semesterStart, setSemesterStart] = useState<string>("2026-06-01");
-  const [semesterEnd, setSemesterEnd] = useState<string>("2026-10-31");
+  const [semesterStart, setSemesterStart] = useState<string>("2026-10-15");
+  const [semesterEnd, setSemesterEnd] = useState<string>("2027-02-01");
 
   // Load and listen to shared attendance
   useEffect(() => {
@@ -57,11 +60,14 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
         if (calPropSnap.exists()) {
           const calData = calPropSnap.data();
           if (calData["start-calendar"]) {
-            // Use semester range (e.g. 2026-06 to 2026-10 for current term)
-            setSemesterStart(`${calData["start-calendar"]}-01`);
+            setSemesterStart(
+              parseCalendarPropertyDateKey(calData["start-calendar"], "2026-10-15")
+            );
           }
           if (calData["end-calendar"]) {
-            setSemesterEnd(`${calData["end-calendar"]}-28`);
+            setSemesterEnd(
+              parseCalendarPropertyDateKey(calData["end-calendar"], "2027-02-01", true)
+            );
           }
         }
 
@@ -133,10 +139,9 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
   // Automatic calculation strictly from scheduled sessions and attendance records
   // "ส่วนจำนวนวันที่ลาได้ให้เช็คจากวันที่เข้าเท่านั้นโดยแก้เองเหมือนในรูปไม่ได้"
   const calculations = useMemo(() => {
-    // Current semester window: 1 academic semester (~20 weeks)
-    // E.g. starting June 1, 2026 to October 31, 2026 for Semester 1
-    const termStart = new Date("2026-06-01");
-    const termEnd = new Date("2026-10-31");
+    // Current semester window derived from Firebase start-calendar and end-calendar
+    const termStart = parseDateString(semesterStart);
+    const termEnd = parseDateString(semesterEnd);
 
     return subjects.map((subj) => {
       let totalSemesterHours = 0;
@@ -188,14 +193,14 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
       }
 
       // If timetable is empty or minimal, provide a minimum semester hours fallback
-      const totalHours = Math.max(totalSemesterHours, 20);
+      const totalHours = totalSemesterHours > 0 ? totalSemesterHours : 20;
 
       // Max allowed absence quota: Standard 20% of total class hours (เกณฑ์เวลาเรียน 80%)
       // "จำนวนวันที่ลาได้ให้เช็คจากวันที่เข้าเท่านั้น"
       const maxAbsence = Math.max(1, Math.floor(totalHours * 0.20));
 
       const remainingQuota = maxAbsence - totalMissed;
-      const percentageUsed = Math.min(100, Math.round((totalMissed / maxAbsence) * 100));
+      const percentageUsed = maxAbsence > 0 ? Math.min(100, Math.round((totalMissed / maxAbsence) * 100)) : 0;
 
       return {
         subject: subj,
@@ -207,7 +212,7 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
         percentageUsed,
       };
     });
-  }, [subjects, attendanceMap, dayOffMap, todayKey]);
+  }, [subjects, attendanceMap, dayOffMap, todayKey, semesterStart, semesterEnd]);
 
   const todayFormatted = useMemo(() => {
     const d = new Date();
@@ -244,7 +249,7 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
             <div>
               <h2 className="text-lg font-bold">คำนวณวิชาที่ขาดเรียน</h2>
               <p className="text-xs text-pink-100 mt-0.5">
-                คำนวณจากวันที่เข้าเรียนถึงปัจจุบัน ({todayFormatted})
+                ภาคเรียน: {formatThaiDateRange(semesterStart, semesterEnd)} • คำนวณถึงปัจจุบัน ({todayFormatted})
               </p>
             </div>
           </div>
