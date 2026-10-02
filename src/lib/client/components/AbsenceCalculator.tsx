@@ -1,25 +1,18 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { collection, getDocs, doc, getDoc } from "firebase/firestore";
 import { singletonFirestorePublic } from "@/lib/client/singleton/client.firebasePublic";
 import {
   formatDateKey,
+  getPeriodKey,
   getAttendanceMap,
-  saveAttendanceMap,
-  getSubjectConfigs,
-  saveSubjectConfigs,
   subscribeToAttendance,
-  SubjectConfig,
 } from "@/lib/client/attendanceStorage";
 import {
-  FaBook,
   FaUserTie,
   FaExclamationTriangle,
   FaCheckCircle,
-  FaPlus,
-  FaMinus,
-  FaCog,
   FaCalendarCheck,
   FaTimesCircle,
 } from "react-icons/fa";
@@ -39,36 +32,36 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
   const [subjects, setSubjects] = useState<SubjectItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, boolean>>({});
-  const [subjectConfigs, setSubjectConfigsState] = useState<Record<string, SubjectConfig>>({});
   const [dayOffMap, setDayOffMap] = useState<Record<string, boolean>>({});
-  const [semesterStart, setSemesterStart] = useState<string>("2026-01-01");
-  const [editingSubject, setEditingSubject] = useState<string | null>(null);
+  const [semesterStart, setSemesterStart] = useState<string>("2026-06-01");
+  const [semesterEnd, setSemesterEnd] = useState<string>("2026-10-31");
 
-  // Load and listen to local attendance & configs
+  // Load and listen to shared attendance
   useEffect(() => {
     setAttendanceMap(getAttendanceMap());
-    setSubjectConfigsState(getSubjectConfigs());
-
     const unsubscribe = subscribeToAttendance(() => {
       setAttendanceMap(getAttendanceMap());
-      setSubjectConfigsState(getSubjectConfigs());
     });
     return () => unsubscribe();
   }, []);
 
-  // Fetch timetable subjects for room
+  // Fetch timetable subjects and calendar range
   useEffect(() => {
     async function fetchSubjectsAndCalendar() {
       setLoading(true);
       try {
-        // 1. Fetch calendar properties (start date & day-offs)
+        // 1. Fetch calendar properties
         const calPropSnap = await getDoc(
           doc(singletonFirestorePublic, "calendar", "properties")
         );
         if (calPropSnap.exists()) {
           const calData = calPropSnap.data();
           if (calData["start-calendar"]) {
+            // Use semester range (e.g. 2026-06 to 2026-10 for current term)
             setSemesterStart(`${calData["start-calendar"]}-01`);
+          }
+          if (calData["end-calendar"]) {
+            setSemesterEnd(`${calData["end-calendar"]}-28`);
           }
         }
 
@@ -78,7 +71,7 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
         );
         const dayOffs: Record<string, boolean> = {};
         dayOffSnap.docs.forEach((docSnap) => {
-          const monthKey = docSnap.id; // e.g. "2026-01"
+          const monthKey = docSnap.id;
           const binNumber = docSnap.data()?.bin ?? 0;
           for (let day = 1; day <= 31; day++) {
             if (((binNumber >> (day - 1)) & 1) === 1) {
@@ -92,9 +85,11 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
         // 2. Fetch timetable classes for room
         const subjectsMap: Record<string, SubjectItem> = {};
         for (let dayId = 1; dayId <= 5; dayId++) {
-          const classSnap = await getDocs(
-            collection(singletonFirestorePublic, `rooms/${roomId}/table/${dayId}/class`)
+          const classRef = collection(
+            singletonFirestorePublic,
+            `rooms/${roomId}/table/${dayId}/class`
           );
+          const classSnap = await getDocs(classRef);
           classSnap.docs.forEach((d) => {
             const data = d.data();
             const periodIndex = parseInt(d.id, 10);
@@ -123,115 +118,96 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
     fetchSubjectsAndCalendar();
   }, [roomId]);
 
-  // Calculate missed classes up to TODAY
+  // Today reference
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(23, 59, 59, 999);
     return d;
   }, []);
 
+  const todayKey = useMemo(() => {
+    const d = new Date();
+    return formatDateKey(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }, []);
+
+  // Automatic calculation strictly from scheduled sessions and attendance records
+  // "ส่วนจำนวนวันที่ลาได้ให้เช็คจากวันที่เข้าเท่านั้นโดยแก้เองเหมือนในรูปไม่ได้"
   const calculations = useMemo(() => {
-    const startDate = new Date(semesterStart);
-    // Find all dates from semester start up to today
-    const pastDates: { date: Date; dateKey: string; dayOfWeek: number }[] = [];
-    const cur = new Date(startDate);
-
-    while (cur <= today) {
-      const dow = cur.getDay(); // 0 = Sun, 1 = Mon ... 6 = Sat
-      const dateKey = formatDateKey(
-        cur.getFullYear(),
-        cur.getMonth() + 1,
-        cur.getDate()
-      );
-
-      // Only weekdays (1-5) and non-holidays
-      if (dow >= 1 && dow <= 5 && !dayOffMap[dateKey]) {
-        pastDates.push({ date: new Date(cur), dateKey, dayOfWeek: dow });
-      }
-      cur.setDate(cur.getDate() + 1);
-    }
+    // Current semester window: 1 academic semester (~20 weeks)
+    // E.g. starting June 1, 2026 to October 31, 2026 for Semester 1
+    const termStart = new Date("2026-06-01");
+    const termEnd = new Date("2026-10-31");
 
     return subjects.map((subj) => {
-      const cfg = subjectConfigs[subj.id] || {
-        totalHours: 67, // Default 67 hours as requested in the example!
-        maxAbsence: 4, // Default 4 allowed absences as requested in example!
-        manualAbsences: 0,
-      };
+      let totalSemesterHours = 0;
+      let pastScheduledHours = 0;
+      let totalAttended = 0;
+      let totalMissed = 0;
 
-      // 1. Calculate absences from marked calendar dates up to today
-      let calendarAbsenceCount = 0;
-      pastDates.forEach(({ dateKey, dayOfWeek }) => {
-        // If this subject is taught on this day of week
-        const scheduledPeriods = subj.periods.filter((p) => p.dayId === dayOfWeek);
-        if (scheduledPeriods.length > 0) {
-          // If the day is marked as Absent (false) in attendanceMap
-          if (attendanceMap[dateKey] === false) {
-            calendarAbsenceCount += scheduledPeriods.length;
+      // Iterate through each date in the academic semester
+      const cur = new Date(termStart);
+      while (cur <= termEnd) {
+        const dow = cur.getDay(); // 1 = Mon ... 5 = Fri
+        const dateKey = formatDateKey(
+          cur.getFullYear(),
+          cur.getMonth() + 1,
+          cur.getDate()
+        );
+
+        // Check if this is a school day and not a day-off
+        if (dow >= 1 && dow <= 5 && !dayOffMap[dateKey]) {
+          const scheduledPeriods = subj.periods.filter((p) => p.dayId === dow);
+
+          if (scheduledPeriods.length > 0) {
+            // Count total scheduled sessions across the semester
+            totalSemesterHours += scheduledPeriods.length;
+
+            // If date is in the past or today, evaluate attendance
+            if (dateKey <= todayKey) {
+              pastScheduledHours += scheduledPeriods.length;
+
+              scheduledPeriods.forEach((sp) => {
+                const pKey = getPeriodKey(dateKey, sp.periodIndex);
+                const pVal = attendanceMap[pKey];
+
+                if (pVal === true) {
+                  // Checked as attended
+                  totalAttended += 1;
+                } else if (pVal === undefined && attendanceMap[dateKey] === true) {
+                  // Day level checked as attended
+                  totalAttended += 1;
+                } else {
+                  // Not attended (absent by default for past dates)
+                  totalMissed += 1;
+                }
+              });
+            }
           }
         }
-      });
+        cur.setDate(cur.getDate() + 1);
+      }
 
-      const totalMissed = Math.max(0, calendarAbsenceCount + (cfg.manualAbsences || 0));
-      const totalHours = cfg.totalHours || 67;
-      const maxAbsence = cfg.maxAbsence || 4;
+      // If timetable is empty or minimal, provide a minimum semester hours fallback
+      const totalHours = Math.max(totalSemesterHours, 20);
+
+      // Max allowed absence quota: Standard 20% of total class hours (เกณฑ์เวลาเรียน 80%)
+      // "จำนวนวันที่ลาได้ให้เช็คจากวันที่เข้าเท่านั้น"
+      const maxAbsence = Math.max(1, Math.floor(totalHours * 0.20));
+
       const remainingQuota = maxAbsence - totalMissed;
       const percentageUsed = Math.min(100, Math.round((totalMissed / maxAbsence) * 100));
 
       return {
         subject: subj,
-        config: cfg,
         totalMissed,
+        totalAttended,
         totalHours,
         maxAbsence,
         remainingQuota,
         percentageUsed,
-        calendarAbsenceCount,
       };
     });
-  }, [subjects, subjectConfigs, attendanceMap, dayOffMap, semesterStart, today]);
-
-  // Handler to adjust manual absences
-  const handleAdjustAbsence = (subjectId: string, delta: number) => {
-    const current = subjectConfigs[subjectId] || {
-      totalHours: 67,
-      maxAbsence: 4,
-      manualAbsences: 0,
-    };
-    const nextManual = Math.max(0, (current.manualAbsences || 0) + delta);
-    const updated = {
-      ...subjectConfigs,
-      [subjectId]: {
-        ...current,
-        manualAbsences: nextManual,
-      },
-    };
-    setSubjectConfigsState(updated);
-    saveSubjectConfigs(updated);
-  };
-
-  // Handler to update config (total hours & max absence)
-  const handleSaveConfig = (
-    subjectId: string,
-    newTotalHours: number,
-    newMaxAbsence: number
-  ) => {
-    const current = subjectConfigs[subjectId] || {
-      totalHours: 67,
-      maxAbsence: 4,
-      manualAbsences: 0,
-    };
-    const updated = {
-      ...subjectConfigs,
-      [subjectId]: {
-        ...current,
-        totalHours: Math.max(1, newTotalHours),
-        maxAbsence: Math.max(1, newMaxAbsence),
-      },
-    };
-    setSubjectConfigsState(updated);
-    saveSubjectConfigs(updated);
-    setEditingSubject(null);
-  };
+  }, [subjects, attendanceMap, dayOffMap, todayKey]);
 
   const todayFormatted = useMemo(() => {
     const d = new Date();
@@ -247,7 +223,7 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
     return (
       <div className="w-full max-w-xl p-6 bg-white/80 rounded-2xl shadow-sm border border-pink-100 flex items-center justify-center text-slate-400">
         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-pink-500 mr-3"></div>
-        กำลังคำนวณข้อมูลวิชาที่ขาด...
+        กำลังคำนวณข้อมูลวิชาที่ขาดจากตารางเรียน...
       </div>
     );
   }
@@ -268,7 +244,7 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
             <div>
               <h2 className="text-lg font-bold">คำนวณวิชาที่ขาดเรียน</h2>
               <p className="text-xs text-pink-100 mt-0.5">
-                คำนวณเวลาเรียนถึงปัจจุบัน ({todayFormatted})
+                คำนวณจากวันที่เข้าเรียนถึงปัจจุบัน ({todayFormatted})
               </p>
             </div>
           </div>
@@ -283,14 +259,13 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
         {calculations.map(
           ({
             subject,
-            config,
             totalMissed,
+            totalAttended,
             totalHours,
             maxAbsence,
             remainingQuota,
             percentageUsed,
           }) => {
-            const isEditing = editingSubject === subject.id;
             const isOverQuota = totalMissed > maxAbsence;
             const isAtQuota = totalMissed === maxAbsence;
             const isWarning = totalMissed >= Math.ceil(maxAbsence * 0.75) && !isAtQuota && !isOverQuota;
@@ -329,89 +304,12 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
                       <span>โดย {subject.teacher}</span>
                     </div>
                   </div>
-
-                  {/* Settings Button */}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setEditingSubject(isEditing ? null : subject.id)
-                    }
-                    title="แก้ไขโควตาและชั่วโมงเรียน"
-                    className="p-1.5 text-slate-400 hover:text-pink-500 hover:bg-pink-50 rounded-lg transition-colors cursor-pointer"
-                  >
-                    <FaCog size={15} />
-                  </button>
                 </div>
-
-                {/* Edit Config Form (Collapsible) */}
-                {isEditing && (
-                  <form
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      const form = e.currentTarget;
-                      const hours = parseInt(
-                        (form.elements.namedItem("hours") as HTMLInputElement).value,
-                        10
-                      );
-                      const max = parseInt(
-                        (form.elements.namedItem("max") as HTMLInputElement).value,
-                        10
-                      );
-                      handleSaveConfig(subject.id, hours, max);
-                    }}
-                    className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-col gap-2.5 text-xs text-slate-700 animate-fadeIn"
-                  >
-                    <div className="font-semibold text-slate-800">
-                      ตั้งค่าชั่วโมงเรียน & โควตาการขาด
-                    </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block mb-1 text-slate-500">
-                          ชั่วโมงเรียนทั้งหมด:
-                        </label>
-                        <input
-                          type="number"
-                          name="hours"
-                          defaultValue={totalHours}
-                          min={1}
-                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-medium"
-                        />
-                      </div>
-                      <div>
-                        <label className="block mb-1 text-slate-500">
-                          ขาดได้สูงสุด (ครั้ง):
-                        </label>
-                        <input
-                          type="number"
-                          name="max"
-                          defaultValue={maxAbsence}
-                          min={1}
-                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-medium"
-                        />
-                      </div>
-                    </div>
-                    <div className="flex justify-end gap-2 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => setEditingSubject(null)}
-                        className="px-3 py-1 rounded bg-slate-200 hover:bg-slate-300 cursor-pointer font-medium"
-                      >
-                        ยกเลิก
-                      </button>
-                      <button
-                        type="submit"
-                        className="px-3 py-1 rounded bg-pink-500 text-white hover:bg-pink-600 cursor-pointer font-medium"
-                      >
-                        บันทึก
-                      </button>
-                    </div>
-                  </form>
-                )}
 
                 {/* EXACT SPECIFICATION REQUIREMENT DISPLAY:
                     "วิชาจีบสาว จส676767 โดยครูพี่ปูน ขาด 2/4 จากทั้งหมด 67ชั่วโมงเรียน"
                     "(เลขแรกคือเลขที่ขาด เลขสองคือขาดได้ทั้งหมด) ตอนคำนวนวันขาด ให้คำนวนถึง ปัจจุบัน" */}
-                <div className="bg-slate-50 rounded-xl p-3 border border-slate-100 flex flex-col gap-1.5">
+                <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-100 flex flex-col gap-1.5">
                   <div className="text-sm font-semibold text-slate-700 leading-snug">
                     <span className="text-slate-900 font-bold">{subject.subject}</span>{" "}
                     <span className="font-mono text-slate-600">{subject.id}</span>{" "}
@@ -421,15 +319,41 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
                     </span>
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    *(เลขแรกคือเลขที่ขาด เลขสองคือขาดได้ทั้งหมด) คำนวณถึงปัจจุบัน
+                    *(เลขแรกคือเลขที่ขาด เลขสองคือขาดได้ทั้งหมด) คำนวณอัตโนมัติจากวันเข้าเรียนถึงปัจจุบัน
+                  </div>
+                </div>
+
+                {/* Attendance Summary Chips */}
+                <div className="grid grid-cols-4 gap-2 text-center text-xs">
+                  <div className="bg-emerald-50 rounded-xl p-2 border border-emerald-100">
+                    <div className="text-[10px] text-emerald-600 font-medium">เข้าเรียนแล้ว</div>
+                    <div className="font-extrabold text-emerald-700 text-sm mt-0.5">{totalAttended} คาบ</div>
+                  </div>
+                  <div className="bg-rose-50 rounded-xl p-2 border border-rose-100">
+                    <div className="text-[10px] text-rose-600 font-medium">ขาดเรียน</div>
+                    <div className="font-extrabold text-rose-700 text-sm mt-0.5">{totalMissed} คาบ</div>
+                  </div>
+                  <div className="bg-blue-50 rounded-xl p-2 border border-blue-100">
+                    <div className="text-[10px] text-blue-600 font-medium">เรียนทั้งหมด</div>
+                    <div className="font-extrabold text-blue-700 text-sm mt-0.5">{totalHours} คาบ</div>
+                  </div>
+                  <div className={`rounded-xl p-2 border ${
+                    remainingQuota <= 0 ? "bg-red-50 border-red-200" : "bg-slate-50 border-slate-200"
+                  }`}>
+                    <div className="text-[10px] text-slate-500 font-medium">ยังลาได้อีก</div>
+                    <div className={`font-extrabold text-sm mt-0.5 ${
+                      remainingQuota <= 0 ? "text-red-600" : "text-slate-800"
+                    }`}>
+                      {remainingQuota > 0 ? remainingQuota : 0} คาบ
+                    </div>
                   </div>
                 </div>
 
                 {/* Progress Bar & Status Badge */}
-                <div className="flex flex-col gap-1.5">
+                <div className="flex flex-col gap-1.5 pt-1">
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-slate-500 font-medium">
-                      ใช้โควตาขาดเรียน:{" "}
+                      ใช้โควตาขาดเรียนไปแล้ว:{" "}
                       <span className="font-semibold text-slate-700">
                         {percentageUsed}%
                       </span>
@@ -437,26 +361,26 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
 
                     {/* Status Badges */}
                     {isOverQuota ? (
-                      <span className="inline-flex items-center gap-1 font-bold text-[11px] text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
+                      <span className="inline-flex items-center gap-1 font-bold text-[11px] text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
                         <FaTimesCircle size={11} /> ขาดเกินโควตา (มส.)
                       </span>
                     ) : isAtQuota ? (
-                      <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                      <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
                         <FaExclamationTriangle size={11} /> ครบโควตาแล้ว (ห้ามขาดอีก)
                       </span>
                     ) : isWarning ? (
-                      <span className="inline-flex items-center gap-1 font-semibold text-[11px] text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-200">
+                      <span className="inline-flex items-center gap-1 font-semibold text-[11px] text-orange-600 bg-orange-50 px-2.5 py-0.5 rounded-full border border-orange-200">
                         <FaExclamationTriangle size={11} /> เสี่ยง (เหลืออีก {remainingQuota} ครั้ง)
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 font-semibold text-[11px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                      <span className="inline-flex items-center gap-1 font-semibold text-[11px] text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
                         <FaCheckCircle size={11} /> ปลอดภัย (เหลืออีก {remainingQuota} ครั้ง)
                       </span>
                     )}
                   </div>
 
                   {/* Progress track */}
-                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                  <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
                     <div
                       className={`h-full rounded-full transition-all duration-300 ${
                         isOverQuota
@@ -469,32 +393,6 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
                       }`}
                       style={{ width: `${Math.min(100, (totalMissed / maxAbsence) * 100)}%` }}
                     />
-                  </div>
-                </div>
-
-                {/* Quick Action +/- Buttons */}
-                <div className="flex items-center justify-between pt-1 border-t border-slate-100">
-                  <span className="text-[11px] text-slate-400">
-                    ปรับยอดขาดเรียนแบบรวดเร็ว:
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleAdjustAbsence(subject.id, -1)}
-                      disabled={totalMissed <= 0}
-                      className="p-1.5 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 text-xs font-semibold flex items-center gap-1 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition"
-                      title="ลดการขาด 1 ครั้ง"
-                    >
-                      <FaMinus size={10} /> ลด
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAdjustAbsence(subject.id, 1)}
-                      className="p-1.5 px-2.5 rounded-lg bg-pink-50 hover:bg-pink-100 text-pink-600 text-xs font-semibold flex items-center gap-1 cursor-pointer transition active:scale-95"
-                      title="เพิ่มการขาด 1 ครั้ง"
-                    >
-                      <FaPlus size={10} /> บันทึกขาด (+1)
-                    </button>
                   </div>
                 </div>
               </div>

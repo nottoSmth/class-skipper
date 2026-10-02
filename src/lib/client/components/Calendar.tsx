@@ -3,31 +3,28 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { FaAngleLeft, FaAngleRight, FaCalendarDay } from "react-icons/fa";
 import { singletonFirestorePublic } from "@/lib/client/singleton/client.firebasePublic";
-import { doc, getDoc } from "firebase/firestore";
-import Timetable from "@/lib/client/components/Timetable";
+import { doc, getDoc, collection, getDocs } from "firebase/firestore";
+import Timetable, { WeekDayInfo } from "@/lib/client/components/Timetable";
 import {
   formatDateKey,
+  getPeriodKey,
   getAttendanceMap,
   saveAttendanceMap,
   subscribeToAttendance,
+  getDayAttendanceStatus,
+  DayStatus,
 } from "@/lib/client/attendanceStorage";
 
 const MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
 ];
 
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const THAI_MONTH_SHORT = [
+  "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.",
+  "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
+];
 
 export type Day = {
   day: number;
@@ -46,6 +43,16 @@ export function isSameDay(d1: Day, d2: Day): boolean {
   return d1.year === d2.year && d1.month === d2.month && d1.day === d2.day;
 }
 
+interface CalendarCell {
+  dateNumber: number;
+  year: number;
+  month: number;
+  day: number;
+  dateKey: string;
+  isInThisMonth: boolean;
+  dayOfWeek: number; // 0 = Sun ... 6 = Sat
+}
+
 interface CalendarProps {
   roomId?: string;
 }
@@ -53,9 +60,16 @@ interface CalendarProps {
 export default function Calendar({ roomId = "67" }: CalendarProps) {
   const [attendanceMap, setAttendanceMap] = useState<Record<string, boolean>>({});
   const [dayOffCache, setDayOffCache] = useState<Record<string, boolean[]>>({});
+  const [scheduledPeriodsByDay, setScheduledPeriodsByDay] = useState<Record<number, number[]>>({});
   const [nowMonth, setNowMonth] = useState<Day>({ day: 0, month: 0, year: 0 });
   const [allMonths, setAllMonths] = useState<Day[]>([]);
+
+  // Modal State for isolated weekly timetable
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedWeek, setSelectedWeek] = useState<{
+    label: string;
+    days: WeekDayInfo[];
+  } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const monthRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -66,6 +80,9 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth() + 1;
   const currentDayNum = today.getDate();
+  const todayKey = useMemo(() => {
+    return formatDateKey(currentYear, currentMonth, currentDayNum);
+  }, [currentYear, currentMonth, currentDayNum]);
 
   // 1. Lock body scroll when modal is open
   useEffect(() => {
@@ -79,7 +96,7 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     };
   }, [isModalOpen]);
 
-  // 2. Load attendance from storage & listen to updates
+  // 2. Load and subscribe to shared attendance state
   useEffect(() => {
     setAttendanceMap(getAttendanceMap());
     const unsub = subscribeToAttendance(() => {
@@ -88,7 +105,33 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     return () => unsub();
   }, []);
 
-  // 3. Fetch calendar range (start/end months)
+  // 3. Fetch scheduled periods for the room to evaluate days' completion
+  useEffect(() => {
+    async function fetchScheduledPeriods() {
+      try {
+        const periodMap: Record<number, number[]> = { 1: [], 2: [], 3: [], 4: [], 5: [] };
+        for (let dayId = 1; dayId <= 5; dayId++) {
+          const classRef = collection(
+            singletonFirestorePublic,
+            `rooms/${roomId}/table/${dayId}/class`
+          );
+          const snap = await getDocs(classRef);
+          snap.forEach((docSnap) => {
+            const pId = parseInt(docSnap.id, 10);
+            if (!isNaN(pId)) {
+              periodMap[dayId].push(pId);
+            }
+          });
+        }
+        setScheduledPeriodsByDay(periodMap);
+      } catch (err) {
+        console.error("Error fetching room schedule:", err);
+      }
+    }
+    fetchScheduledPeriods();
+  }, [roomId]);
+
+  // 4. Fetch calendar range (start/end months)
   useEffect(() => {
     async function fetchCalendarRange() {
       try {
@@ -133,7 +176,7 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     fetchCalendarRange();
   }, []);
 
-  // 4. Feature: ตอน reload เว็บ ให้เลื่อนไปเดือน ปัจจุบัน
+  // 5. On page reload, auto-scroll to current month
   useEffect(() => {
     if (allMonths.length === 0 || hasAutoScrolled.current) return;
 
@@ -150,7 +193,6 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
       day: currentDayNum,
     });
 
-    // Ensure DOM is ready, then scroll to current month element
     const timer = setTimeout(() => {
       const el = monthRefs.current[idx];
       if (el && scrollRef.current) {
@@ -162,12 +204,12 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     return () => clearTimeout(timer);
   }, [allMonths, currentYear, currentMonth, currentDayNum]);
 
-  // 5. Fetch day-offs for the active/visible month
+  // 6. Fetch day-offs for visible month
   useEffect(() => {
     if (!nowMonth.year || !nowMonth.month) return;
 
     const monthKey = `${nowMonth.year}-${String(nowMonth.month).padStart(2, "0")}`;
-    if (dayOffCache[monthKey]) return; // already cached
+    if (dayOffCache[monthKey]) return;
 
     async function fetchDayOff(key: string) {
       try {
@@ -200,7 +242,7 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     fetchDayOff(monthKey);
   }, [nowMonth, dayOffCache]);
 
-  // 6. Intersection Observer for month visibility
+  // 7. Month carousel intersection observer
   useEffect(() => {
     if (allMonths.length === 0) return;
 
@@ -227,7 +269,7 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     return () => observers.forEach((obs) => obs.disconnect());
   }, [allMonths]);
 
-  // Navigation handlers
+  // Carousel scroll helpers
   const scroll = (dir: number) => {
     if (!scrollRef.current) return;
     scrollRef.current.scrollBy({
@@ -249,29 +291,57 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     }
   };
 
-  // Click on a date: 3-state cycle (Default -> Attended (Green) -> Absent (Red) -> Default)
-  const handleDayClick = (date: Day) => {
-    const monthKey = `${date.year}-${String(date.month).padStart(2, "0")}`;
-    const isDayOff = !!dayOffCache[monthKey]?.[date.day - 1];
-    const dow = new Date(date.year, date.month - 1, date.day).getDay();
+  // Open weekly isolated timetable modal
+  const handleViewWeek = (weekCells: CalendarCell[]) => {
+    // School days are Monday (idx 1) to Friday (idx 5)
+    const schoolDays: WeekDayInfo[] = weekCells.slice(1, 6).map((c) => ({
+      year: c.year,
+      month: c.month,
+      day: c.day,
+      dateKey: c.dateKey,
+      dayOfWeek: c.dayOfWeek,
+    }));
 
-    // Weekend or day-off cannot be modified
-    if (isDayOff || dow === 0 || dow === 6) return;
+    const firstDay = schoolDays[0];
+    const lastDay = schoolDays[schoolDays.length - 1];
+    const weekLabel = `สัปดาห์ที่ ${firstDay.day} ${THAI_MONTH_SHORT[firstDay.month - 1]} - ${lastDay.day} ${THAI_MONTH_SHORT[lastDay.month - 1]} ${lastDay.year}`;
 
-    const dateKey = formatDateKey(date.year, date.month, date.day);
-    const currentVal = attendanceMap[dateKey];
+    setSelectedWeek({
+      label: weekLabel,
+      days: schoolDays,
+    });
+    setIsModalOpen(true);
+  };
 
-    const nextMap = { ...attendanceMap };
-    if (currentVal === undefined) {
-      // 1st click: มาเรียน (Attended / Green)
-      nextMap[dateKey] = true;
-    } else if (currentVal === true) {
-      // 2nd click: ขาดเรียน (Absent / Red - counts in Absence Calculator)
-      nextMap[dateKey] = false;
-    } else {
-      // 3rd click: Reset to neutral slate
-      delete nextMap[dateKey];
-    }
+  // Click on a past/today school day: only 2 states (มา <-> ขาด)
+  const handleDayClick = (cell: CalendarCell) => {
+    // Future dates cannot be toggled into attendance
+    if (cell.dateKey > todayKey) return;
+
+    // Weekends and day-offs are non-school days
+    if (cell.dayOfWeek === 0 || cell.dayOfWeek === 6) return;
+    const monthKey = `${cell.year}-${String(cell.month).padStart(2, "0")}`;
+    if (dayOffCache[monthKey]?.[cell.day - 1]) return;
+
+    const scheduled = scheduledPeriodsByDay[cell.dayOfWeek] || [];
+    const currentStatus = getDayAttendanceStatus(
+      cell.dateKey,
+      cell.dayOfWeek,
+      scheduled,
+      attendanceMap,
+      false,
+      todayKey
+    );
+
+    // Only 2 states: If currently attended -> switch to absent. If absent or partial -> switch to attended.
+    const willBeAttended = currentStatus !== "attended";
+
+    const nextMap = { ...attendanceMap, [cell.dateKey]: willBeAttended };
+    // Also toggle all scheduled periods of this day so they stay in sync
+    scheduled.forEach((p) => {
+      const pKey = getPeriodKey(cell.dateKey, p);
+      nextMap[pKey] = willBeAttended;
+    });
 
     setAttendanceMap(nextMap);
     saveAttendanceMap(nextMap);
@@ -281,7 +351,6 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
     <div className="max-w-xl mx-auto relative flex flex-col items-center justify-center">
       {/* Top Toolbar */}
       <div className="w-full flex justify-between items-center mb-3 px-1">
-        {/* Current Month Shortcut Button */}
         <button
           type="button"
           onClick={scrollToCurrentMonth}
@@ -292,7 +361,6 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
           <span>เดือนปัจจุบัน</span>
         </button>
 
-        {/* Previous / Next Arrows */}
         <div className="flex gap-2">
           <button
             type="button"
@@ -331,19 +399,48 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
             0
           ).getDate();
 
-          const cells = Array.from({ length: 42 }).map((_, i) => {
+          // Calculate all 42 cells with precise date coordinates
+          const cells: CalendarCell[] = Array.from({ length: 42 }).map((_, i) => {
             const dateNum = i - firstDow + 1;
-            if (dateNum < 1)
+            const dayOfWeek = i % 7;
+
+            if (dateNum < 1) {
+              const prevMonth = month.month === 1 ? 12 : month.month - 1;
+              const prevYear = month.month === 1 ? month.year - 1 : month.year;
+              const d = daysInPrevMonth + dateNum;
               return {
-                dateNumber: daysInPrevMonth + dateNum,
+                dateNumber: d,
+                year: prevYear,
+                month: prevMonth,
+                day: d,
+                dateKey: formatDateKey(prevYear, prevMonth, d),
                 isInThisMonth: false,
+                dayOfWeek,
               };
-            if (dateNum > daysInMonth)
+            }
+            if (dateNum > daysInMonth) {
+              const nextMonth = month.month === 12 ? 1 : month.month + 1;
+              const nextYear = month.month === 12 ? month.year + 1 : month.year;
+              const d = dateNum - daysInMonth;
               return {
-                dateNumber: dateNum - daysInMonth,
+                dateNumber: d,
+                year: nextYear,
+                month: nextMonth,
+                day: d,
+                dateKey: formatDateKey(nextYear, nextMonth, d),
                 isInThisMonth: false,
+                dayOfWeek,
               };
-            return { dateNumber: dateNum, isInThisMonth: true };
+            }
+            return {
+              dateNumber: dateNum,
+              year: month.year,
+              month: month.month,
+              day: dateNum,
+              dateKey: formatDateKey(month.year, month.month, dateNum),
+              isInThisMonth: true,
+              dayOfWeek,
+            };
           });
 
           return (
@@ -377,13 +474,12 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                 {DAY_LABELS.map((label, idx) => (
                   <div
                     key={idx}
-                    className={`py-1.5 rounded-lg text-center text-xs font-semibold ${
-                      label === "Sun"
+                    className={`py-1.5 rounded-lg text-center text-xs font-semibold ${label === "Sun"
                         ? "text-red-500 bg-red-50/60"
                         : label === "Sat"
-                        ? "text-violet-700 bg-violet-50/60"
-                        : "text-slate-600 bg-slate-100/70"
-                    }`}
+                          ? "text-violet-700 bg-violet-50/60"
+                          : "text-slate-600 bg-slate-100/70"
+                      }`}
                   >
                     {label}
                   </div>
@@ -404,61 +500,73 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                     <React.Fragment key={weekIdx}>
                       {weekCells.map((cell, dayIdx) => {
                         const globalIdx = weekIdx * 7 + dayIdx;
-                        const isSunday = globalIdx % 7 === 0;
-                        const isSaturday = globalIdx % 7 === 6;
+                        const isSunday = cell.dayOfWeek === 0;
+                        const isSaturday = cell.dayOfWeek === 6;
+
+                        const isDayOff = !!dayOffCache[monthKey]?.[cell.day - 1];
+                        const scheduled = scheduledPeriodsByDay[cell.dayOfWeek] || [];
+
+                        // Compute state (future, attended, partial, absent, dayOff, weekend)
+                        const status: DayStatus = getDayAttendanceStatus(
+                          cell.dateKey,
+                          cell.dayOfWeek,
+                          scheduled,
+                          attendanceMap,
+                          isDayOff,
+                          todayKey
+                        );
+
+                        const isToday = cell.dateKey === todayKey;
+                        const isPastOrToday = cell.dateKey <= todayKey;
+                        const isSchoolDay = !isSunday && !isSaturday && !isDayOff;
+                        const isClickable = isSchoolDay && isPastOrToday;
+
+                        // Visual styling based on status
+                        let cellClass: string;
+                        let statusText: string | null = null;
 
                         if (!cell.isInThisMonth) {
-                          return (
-                            <div
-                              key={globalIdx}
-                              className={`h-12 px-2 py-1 rounded-xl bg-slate-50/60 flex flex-col justify-start text-xs ${
-                                isSunday ? "text-red-200" : "text-slate-300"
-                              }`}
-                            >
-                              <span>{cell.dateNumber}</span>
-                            </div>
-                          );
-                        }
-
-                        const currentDay: Day = {
-                          year: month.year,
-                          month: month.month,
-                          day: cell.dateNumber,
-                        };
-
-                        const dateKey = formatDateKey(
-                          currentDay.year,
-                          currentDay.month,
-                          currentDay.day
-                        );
-                        const isDayOff = !!dayOffCache[monthKey]?.[cell.dateNumber - 1];
-                        const attendanceStatus = attendanceMap[dateKey];
-                        const isClickable = !isDayOff && !isSunday && !isSaturday;
-
-                        // Feature: highlight วันนี้ว่าอยู่ที่ไหน
-                        const isToday =
-                          currentDay.year === currentYear &&
-                          currentDay.month === currentMonth &&
-                          currentDay.day === currentDayNum;
-
-                        let cellClass: string;
-                        if (isDayOff) {
-                          cellClass = "bg-violet-100 text-violet-500/80";
-                        } else if (attendanceStatus === true) {
-                          cellClass = "bg-emerald-400 text-white shadow-xs font-semibold";
-                        } else if (attendanceStatus === false) {
-                          cellClass = "bg-rose-400 text-white shadow-xs font-semibold";
+                          // Day belongs to neighboring month
+                          if (status === "attended") {
+                            cellClass = "bg-emerald-300/60 text-white font-medium";
+                            statusText = "มา";
+                          } else if (status === "partial") {
+                            cellClass = "bg-amber-300/70 text-white font-medium";
+                            statusText = "ไม่ครบ";
+                          } else if (status === "absent") {
+                            cellClass = "bg-rose-300/60 text-white font-medium";
+                            statusText = "ขาด";
+                          } else {
+                            cellClass = `bg-slate-50/50 ${isSunday ? "text-red-200" : "text-slate-300"}`;
+                          }
                         } else {
-                          cellClass = `bg-slate-100/90 hover:bg-slate-200/80 ${
-                            isSunday
-                              ? "text-red-500"
-                              : isSaturday
-                              ? "text-violet-800"
-                              : "text-slate-800"
-                          }`;
+                          // Day belongs to current month
+                          if (status === "dayOff") {
+                            cellClass = "bg-violet-100 text-violet-500/80";
+                            statusText = "หยุด";
+                          } else if (isSunday) {
+                            cellClass = "bg-slate-50 text-red-500";
+                          } else if (isSaturday) {
+                            cellClass = "bg-slate-50 text-violet-800";
+                          } else if (status === "future") {
+                            // วันที่ยังมาไม่ถึงเป็นสีเทา
+                            cellClass = "bg-slate-100 text-slate-400 border border-slate-200/50 hover:bg-slate-200/70";
+                          } else if (status === "attended") {
+                            // เข้าเรียนครบทุกคาบ (เขียว)
+                            cellClass = "bg-emerald-400 text-white font-semibold shadow-xs";
+                            statusText = "มา";
+                          } else if (status === "partial") {
+                            // เข้าไม่ครบทุกคาบ (เหลือง)
+                            cellClass = "bg-amber-400 text-white font-semibold shadow-xs";
+                            statusText = "ไม่ครบ";
+                          } else {
+                            // ขาดเรียน (สีแดง - Default ของวันที่ผ่านมาแล้ว)
+                            cellClass = "bg-rose-400 text-white font-semibold shadow-xs";
+                            statusText = "ขาด";
+                          }
                         }
 
-                        // Highlight วันนี้: Ring + Pink Accent + Badge
+                        // Highlight วันนี้
                         const todayHighlightClass = isToday
                           ? "ring-2 ring-pink-500 ring-offset-2 ring-offset-white shadow-sm z-10"
                           : "";
@@ -466,29 +574,27 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                         return (
                           <div
                             key={globalIdx}
-                            className={`h-12 px-1.5 py-1 rounded-xl flex flex-col justify-between text-xs transition-all ${cellClass} ${todayHighlightClass} ${
-                              isClickable
-                                ? "cursor-pointer select-none active:scale-95"
-                                : ""
-                            }`}
-                            onClick={() => isClickable && handleDayClick(currentDay)}
+                            onClick={() => isClickable && handleDayClick(cell)}
+                            className={`h-12 px-1.5 py-1 rounded-xl flex flex-col justify-between text-xs transition-all ${cellClass} ${todayHighlightClass} ${isClickable ? "cursor-pointer select-none active:scale-95" : ""
+                              }`}
                             title={
                               isToday
                                 ? "วันนี้"
-                                : isDayOff
-                                ? "วันหยุด"
-                                : attendanceStatus === true
-                                ? "มาเรียน (คลิกเพื่อเปลี่ยนเป็นขาดเรียน)"
-                                : attendanceStatus === false
-                                ? "ขาดเรียน (คลิกเพื่อยกเลิก)"
-                                : "คลิกเพื่อเช็กชื่อ"
+                                : status === "future"
+                                  ? "วันที่ยังมาไม่ถึง"
+                                  : status === "attended"
+                                    ? "มาเรียน (คลิกเพื่อเปลี่ยนเป็นขาด)"
+                                    : status === "partial"
+                                      ? "เข้าเรียนไม่ครบ (คลิกเพื่อเปลี่ยนเป็นมา หรือกด View เพื่อดูรายคาบ)"
+                                      : status === "absent"
+                                        ? "ขาดเรียน (คลิกเพื่อเปลี่ยนเป็นมา)"
+                                        : undefined
                             }
                           >
                             <div className="flex items-center justify-between w-full">
                               <span
-                                className={`text-[12px] ${
-                                  isToday ? "font-bold text-pink-600" : ""
-                                }`}
+                                className={`text-[12px] ${isToday ? "font-bold text-pink-600" : ""
+                                  }`}
                               >
                                 {cell.dateNumber}
                               </span>
@@ -499,30 +605,22 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                               )}
                             </div>
 
-                            {/* Small Status indicator text if marked */}
-                            <div className="text-[9px] leading-none self-end">
-                              {attendanceStatus === true && (
-                                <span className="text-white/90">มา</span>
-                              )}
-                              {attendanceStatus === false && (
-                                <span className="text-white font-bold">ขาด</span>
-                              )}
-                              {isDayOff && (
-                                <span className="text-violet-600/75 text-[8px]">
-                                  หยุด
-                                </span>
-                              )}
-                            </div>
+                            {/* Status Tag */}
+                            {statusText && (
+                              <div className="text-[9px] font-bold leading-none self-end">
+                                <span>{statusText}</span>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
 
-                      {/* View Week Button */}
+                      {/* View Week Button (Isolated weekly timetable) */}
                       <button
                         type="button"
-                        onClick={() => setIsModalOpen(true)}
+                        onClick={() => handleViewWeek(weekCells)}
                         className="h-12 flex items-center justify-center rounded-xl bg-pink-50/60 border border-pink-200/60 text-xs font-semibold text-pink-500 hover:text-pink-600 hover:bg-pink-100/70 cursor-pointer transition-all active:scale-95 shadow-2xs"
-                        title="ดูตารางเรียนสัปดาห์นี้"
+                        title="ดูตารางเรียนประจำสัปดาห์นี้"
                       >
                         View
                       </button>
@@ -539,11 +637,19 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-                  <span>มาเรียน</span>
+                  <span>มาเรียน (ครบ)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span>เข้าไม่ครบ</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-rose-400" />
-                  <span>ขาดเรียน</span>
+                  <span>ขาดเรียน (Default)</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-200 border border-slate-300" />
+                  <span>ยังไม่ถึง</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-violet-200" />
@@ -556,7 +662,7 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
       </div>
 
       {/* Timetable Modal Overlay */}
-      {isModalOpen && (
+      {isModalOpen && selectedWeek && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn"
           onClick={() => setIsModalOpen(false)}
@@ -572,7 +678,7 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                   ตารางเรียนห้อง {roomId}
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  กดที่คาบเรียนเพื่อบันทึกสถานะการเข้าเรียน
+                  {selectedWeek.label} • คลิกที่คาบเรียนเพื่อบันทึกสถานะ (มา / ขาด)
                 </p>
               </div>
               <button
@@ -584,9 +690,13 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
               </button>
             </div>
 
-            {/* Timetable Content */}
+            {/* Timetable Content isolated for this specific week */}
             <div className="py-2">
-              <Timetable roomId={roomId} />
+              <Timetable
+                roomId={roomId}
+                weekDays={selectedWeek.days}
+                weekLabel={selectedWeek.label}
+              />
             </div>
           </div>
         </div>
