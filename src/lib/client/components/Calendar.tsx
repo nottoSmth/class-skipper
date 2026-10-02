@@ -13,6 +13,7 @@ import {
   isDayPartiallyAttended,
   togglePeriod,
 } from "@/lib/shared/attendanceCodec";
+import { handleClientLogout } from "@/lib/client/auth";
 
 const MONTH_NAMES = [
   "January",
@@ -116,8 +117,12 @@ export default function Calendar() {
         try {
           const docRef = doc(singletonFirestore, "users", username, "attendance", currentMonthKey);
           await setDoc(docRef, { data: newData, updatedAt: Date.now() }, { merge: true });
-        } catch (err) {
+        } catch (err: unknown) {
           console.error("Failed to save attendance:", err);
+          const errorCode = (err as { code?: string })?.code;
+          if (errorCode === "permission-denied" || errorCode === "unauthenticated") {
+            await handleClientLogout("/login");
+          }
         }
       }, 1500);
     },
@@ -140,8 +145,13 @@ export default function Calendar() {
           const data = snap.exists() ? snap.data()?.data : null;
           setAttendance(data || emptyAttendance());
         }
-      } catch (err) {
+      } catch (err: unknown) {
         console.error("Failed to load attendance:", err);
+        const errorCode = (err as { code?: string })?.code;
+        if (errorCode === "permission-denied" || errorCode === "unauthenticated") {
+          await handleClientLogout("/login");
+          return;
+        }
         if (!cancelled) setAttendance(emptyAttendance());
       } finally {
         if (!cancelled) setAttendanceLoading(false);

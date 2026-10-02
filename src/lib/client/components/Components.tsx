@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { handleClientLogout } from "@/lib/client/auth";
 
 type UserData = {
     username: string;
@@ -23,12 +24,7 @@ export function Header() {
     const router = useRouter();
 
     async function logout() {
-        const res = await fetch("/api/logout", {
-            method: "POST",
-        });
-        if (!res.ok) return;
-        localStorage.clear()
-        router.push("/login");
+        await handleClientLogout("/login");
         setUserData(null);
     }
 
