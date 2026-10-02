@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { handleClientLogout } from "@/lib/client/auth";
 
+import { useFirebaseContext } from "@/lib/client/context/firebaseContext";
+
 type UserData = {
     username: string;
 };
@@ -23,7 +25,9 @@ export function Header() {
 
     const router = useRouter();
 
+    const { setIsFirebaseReady } = useFirebaseContext();
     async function logout() {
+        setIsFirebaseReady(false);
         await handleClientLogout("/login");
         setUserData(null);
     }

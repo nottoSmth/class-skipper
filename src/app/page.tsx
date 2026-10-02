@@ -8,7 +8,6 @@ export default function Home() {
     <div>
       <Header />
       <div className="flex flex-col items-center justify-center h-screen gap-4">
-        <BuildingRoomSelector />
         <Calendar />
       </div>
     </div>

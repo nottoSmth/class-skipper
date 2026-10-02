@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import FirebaseTokenFetcher from "@/lib/client/client.firebaseTokenFetcher";
 
+import { FirebaseContextProvider } from "@/lib/client/context/firebaseContext";
+
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
@@ -29,8 +31,10 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <FirebaseTokenFetcher />
-        {children}
+        <FirebaseContextProvider>
+          <FirebaseTokenFetcher />
+          {children}
+        </FirebaseContextProvider>
       </body>
     </html>
   );

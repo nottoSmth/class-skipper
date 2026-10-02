@@ -5,9 +5,16 @@ import { signInWithCustomToken } from "firebase/auth";
 import { singletonFirebaseAuth } from "@/lib/client/singleton/client.firebaseAuth";
 import { handleClientLogout } from "@/lib/client/auth";
 
-export async function logInToFirebase() {
+import { useFirebaseContext } from "@/lib/client/context/firebaseContext";
+
+export async function logInToFirebase(
+  setIsFirebaseReady?: (ready: boolean) => void,
+) {
   console.log("Attempting to log in to Firebase...");
-  console.log("API Key loaded (first 5 chars):", process.env.NEXT_PUBLIC_FIREBASE_API_KEY?.substring(0, 5));
+  console.log(
+    "API Key loaded (first 5 chars):",
+    process.env.NEXT_PUBLIC_FIREBASE_API_KEY?.substring(0, 5),
+  );
 
   async function fetchToken() {
     const storedExpiry = localStorage.getItem("tokenExpiry");
@@ -19,6 +26,7 @@ export async function logInToFirebase() {
 
     if (res.status === 401) {
       console.warn("Session expired or invalid, logging out automatically...");
+      setIsFirebaseReady?.(false);
       await handleClientLogout("/login");
       return;
     }
@@ -38,10 +46,12 @@ export async function logInToFirebase() {
   async function signInWithToken() {
     const token = localStorage.getItem("token");
     if (!token) return;
+    console.log("signing in to firebase with token:", "**HIDDEN**");
     try {
-      console.log("signing in to firebase with token:", "**HIDDEN**");
       await signInWithCustomToken(singletonFirebaseAuth, token);
+      setIsFirebaseReady?.(true);
     } catch (err: unknown) {
+      setIsFirebaseReady?.(false);
       console.error("Firebase custom token authentication failed:", err);
       const errorCode = (err as { code?: string })?.code;
       if (
@@ -60,20 +70,22 @@ export async function logInToFirebase() {
 }
 
 export default function FirebaseTokenFetcher() {
+  const { setIsFirebaseReady } = useFirebaseContext();
+
   useEffect(() => {
     if (typeof window !== "undefined" && window.location.pathname === "/login") {
       return;
     }
 
     // Run immediately on mount
-    logInToFirebase();
+    logInToFirebase(setIsFirebaseReady);
 
     // Check periodically (every 2 minutes)
     const intervalId = setInterval(() => {
       if (typeof window !== "undefined" && window.location.pathname === "/login") {
         return;
       }
-      logInToFirebase();
+      logInToFirebase(setIsFirebaseReady);
     }, 2 * 60 * 1000);
 
     // Also check when the user returns to the tab/window
@@ -81,7 +93,7 @@ export default function FirebaseTokenFetcher() {
       if (typeof window !== "undefined" && window.location.pathname === "/login") {
         return;
       }
-      logInToFirebase();
+      logInToFirebase(setIsFirebaseReady);
     };
 
     window.addEventListener("focus", handleFocus);
@@ -90,7 +102,12 @@ export default function FirebaseTokenFetcher() {
       clearInterval(intervalId);
       window.removeEventListener("focus", handleFocus);
     };
-  }, []);
+  }, [setIsFirebaseReady]);
+
+  useEffect(() => {
+    setIsFirebaseReady(false);
+  }, [setIsFirebaseReady]);
 
   return null;
 }
+

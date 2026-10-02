@@ -1,5 +1,7 @@
 "use client";
 
+import { useFirebaseContext } from "@/lib/client/context/firebaseContext";
+
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -14,6 +16,7 @@ import { Header } from "@/lib/client/components/Components";
 import { logInToFirebase } from "@/lib/client/client.firebaseTokenFetcher";
 
 export default function AuthPage() {
+  const { setIsFirebaseReady } = useFirebaseContext();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
@@ -46,7 +49,7 @@ export default function AuthPage() {
         return;
       }
       localStorage.setItem("userData", JSON.stringify(data));
-      logInToFirebase();
+      logInToFirebase(setIsFirebaseReady);
       router.push("/");
     } catch (err) {
       console.error(err);
