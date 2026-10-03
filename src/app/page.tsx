@@ -8,6 +8,7 @@ import { Header } from "@/lib/client/components/Components";
 import { doc, getDoc } from "firebase/firestore";
 import { singletonFirestore } from "@/lib/client/singleton/client.firebaseAuth";
 import { useFirebaseContext } from "@/lib/client/context/firebaseContext";
+import { pullAttendanceFromFirestore } from "@/lib/client/attendanceSync";
 
 function getStoredUsername(): string | null {
   if (typeof window === "undefined") return null;
@@ -44,6 +45,7 @@ export default function Home() {
             setSelectedRoom(String(data.room));
           }
         }
+        await pullAttendanceFromFirestore(loggedInUsername!);
       } catch (e) {
         console.error("Failed to fetch user room:", e);
       }

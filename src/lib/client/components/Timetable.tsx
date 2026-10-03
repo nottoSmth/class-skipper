@@ -11,6 +11,7 @@ import {
   subscribeToAttendance,
   parseCalendarPropertyDateKey,
 } from "@/lib/client/attendanceStorage";
+import { pushAttendanceMonth } from "@/lib/client/attendanceSync";
 import { FaCheck, FaTimes, FaCalendarAlt } from "react-icons/fa";
 
 // 1. Define types for the Timetable data structure
@@ -221,6 +222,16 @@ export default function Timetable({
     // Also update day-level key if needed so it stays aligned
     setAttendanceMap(nextMap);
     saveAttendanceMap(nextMap);
+    
+    try {
+      const stored = localStorage.getItem("userData");
+      const username = stored ? JSON.parse(stored)?.username : null;
+      if (username) {
+        pushAttendanceMonth(username, dateKey.substring(0, 7));
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // Quick action: set all periods of a day to attended or absent
@@ -242,6 +253,16 @@ export default function Timetable({
 
     setAttendanceMap(nextMap);
     saveAttendanceMap(nextMap);
+    
+    try {
+      const stored = localStorage.getItem("userData");
+      const username = stored ? JSON.parse(stored)?.username : null;
+      if (username) {
+        pushAttendanceMonth(username, dayInfo.dateKey.substring(0, 7));
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   if (loading) {

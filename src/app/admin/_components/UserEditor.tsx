@@ -133,6 +133,7 @@ export default function UserEditor({ allRoomIds }: UserEditorProps) {
     });
 
   return (
+    <>
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -141,6 +142,7 @@ export default function UserEditor({ allRoomIds }: UserEditorProps) {
             placeholder="ค้นหาชื่อผู้ใช้..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            autoComplete="off"
             className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-emerald-400 focus:outline-none"
           />
           <select
@@ -258,7 +260,7 @@ export default function UserEditor({ allRoomIds }: UserEditorProps) {
 
       {editUser && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4">
+        <form autoComplete="off" onSubmit={(e) => e.preventDefault()} className="bg-white rounded-2xl p-6 w-full max-w-md space-y-4">
             <h3 className="text-lg font-bold text-slate-800">
               {isNewUser ? "เพิ่มผู้ใช้ใหม่" : "แก้ไขผู้ใช้"}
             </h3>
@@ -270,6 +272,8 @@ export default function UserEditor({ allRoomIds }: UserEditorProps) {
                 value={editUser.username}
                 onChange={(e) => setEditUser({ ...editUser, username: e.target.value })}
                 disabled={!isNewUser}
+                autoComplete="off"
+                name="username-no-autofill"
                 className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 text-sm font-medium focus:ring-2 focus:ring-emerald-400 focus:outline-none disabled:opacity-50"
               />
             </div>
@@ -311,6 +315,8 @@ export default function UserEditor({ allRoomIds }: UserEditorProps) {
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
+                autoComplete="new-password"
+                name="new-password-no-autofill"
                 className="w-full px-3 py-2 border border-slate-200 rounded-xl bg-white text-sm font-medium focus:ring-2 focus:ring-emerald-400 focus:outline-none"
               />
             </div>
@@ -334,15 +340,16 @@ export default function UserEditor({ allRoomIds }: UserEditorProps) {
                 {saving ? "กำลังบันทึก..." : "บันทึก"}
               </button>
             </div>
-          </div>
+        </form>
         </div>
       )}
+    </div>
 
       {toast && (
         <div className="fixed bottom-6 right-6 bg-slate-800 text-white text-sm px-4 py-2.5 rounded-xl shadow-lg z-50">
           {toast}
         </div>
       )}
-    </div>
+    </>
   );
 }

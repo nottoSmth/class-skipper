@@ -80,7 +80,7 @@ export default function TimetableEditor({
       // Update local state
       setTimetable((prev) => {
         const next = { ...prev };
-        if (!next[dayId]) next[dayId] = {};
+        next[dayId] = { ...(next[dayId] || {}) };
         if (data === null) {
           delete next[dayId][periodId];
         } else {

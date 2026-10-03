@@ -16,6 +16,7 @@ import {
   parseCalendarPropertyDate,
   parseCalendarPropertyDateKey,
 } from "@/lib/client/attendanceStorage";
+import { pushAttendanceMonth } from "@/lib/client/attendanceSync";
 
 const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
@@ -361,6 +362,16 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
 
     setAttendanceMap(nextMap);
     saveAttendanceMap(nextMap);
+
+    try {
+      const stored = localStorage.getItem("userData");
+      const username = stored ? JSON.parse(stored)?.username : null;
+      if (username) {
+        pushAttendanceMonth(username, cell.dateKey.substring(0, 7));
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return (
