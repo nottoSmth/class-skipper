@@ -196,11 +196,13 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
       const totalHours = totalSemesterHours > 0 ? totalSemesterHours : 20;
 
       // Max allowed absence quota: Standard 20% of total class hours (เกณฑ์เวลาเรียน 80%)
-      // "จำนวนวันที่ลาได้ให้เช็คจากวันที่เข้าเท่านั้น"
-      const maxAbsence = Math.max(1, Math.floor(totalHours * 0.20));
+      // ปัดเศษลงตามจริง (เช่น 2 ชั่วโมง 20% คือ 0.4 -> ปัดลงเป็น 0 รอบ)
+      const maxAbsence = Math.floor(totalHours * 0.20);
 
       const remainingQuota = maxAbsence - totalMissed;
-      const percentageUsed = maxAbsence > 0 ? Math.min(100, Math.round((totalMissed / maxAbsence) * 100)) : 0;
+      const percentageUsed = maxAbsence > 0
+        ? Math.min(100, Math.round((totalMissed / maxAbsence) * 100))
+        : (totalMissed > 0 ? 100 : 0);
 
       return {
         subject: subj,
@@ -273,7 +275,17 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
           }) => {
             const isOverQuota = totalMissed > maxAbsence;
             const isAtQuota = totalMissed === maxAbsence;
-            const isWarning = totalMissed >= Math.ceil(maxAbsence * 0.75) && !isAtQuota && !isOverQuota;
+            const isWarning = maxAbsence > 0 && totalMissed >= Math.ceil(maxAbsence * 0.75) && !isAtQuota && !isOverQuota;
+
+            const barColor = isOverQuota
+              ? "bg-rose-500"
+              : maxAbsence === 0
+              ? (totalMissed > 0 ? "bg-rose-500" : "bg-emerald-400")
+              : isAtQuota
+              ? "bg-amber-500"
+              : isWarning
+              ? "bg-orange-400"
+              : "bg-emerald-400";
 
             return (
               <div
@@ -282,15 +294,7 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
               >
                 {/* Status indicator bar on left */}
                 <div
-                  className={`absolute top-0 left-0 bottom-0 w-1.5 ${
-                    isOverQuota
-                      ? "bg-rose-500"
-                      : isAtQuota
-                      ? "bg-amber-500"
-                      : isWarning
-                      ? "bg-orange-400"
-                      : "bg-emerald-400"
-                  }`}
+                  className={`absolute top-0 left-0 bottom-0 w-1.5 ${barColor}`}
                 />
 
                 {/* Top Row: Subject Name, ID, Teacher */}
@@ -369,6 +373,10 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
                       <span className="inline-flex items-center gap-1 font-bold text-[11px] text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
                         <FaTimesCircle size={11} /> ขาดเกินโควตา (มส.)
                       </span>
+                    ) : maxAbsence === 0 ? (
+                      <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
+                        <FaExclamationTriangle size={11} /> ไม่มีโควตาขาดเรียน (ห้ามขาด)
+                      </span>
                     ) : isAtQuota ? (
                       <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
                         <FaExclamationTriangle size={11} /> ครบโควตาแล้ว (ห้ามขาดอีก)
@@ -387,16 +395,8 @@ export default function AbsenceCalculator({ roomId = "67" }: AbsenceCalculatorPr
                   {/* Progress track */}
                   <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-300 ${
-                        isOverQuota
-                          ? "bg-rose-500"
-                          : isAtQuota
-                          ? "bg-amber-500"
-                          : isWarning
-                          ? "bg-orange-400"
-                          : "bg-emerald-400"
-                      }`}
-                      style={{ width: `${Math.min(100, (totalMissed / maxAbsence) * 100)}%` }}
+                      className={`h-full rounded-full transition-all duration-300 ${barColor}`}
+                      style={{ width: `${percentageUsed}%` }}
                     />
                   </div>
                 </div>

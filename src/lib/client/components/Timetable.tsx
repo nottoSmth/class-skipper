@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, getDocs, doc, getDoc } from "firebase/firestore";
 import { singletonFirestorePublic } from "@/lib/client/singleton/client.firebasePublic";
 import {
   formatDateKey,
@@ -9,6 +9,7 @@ import {
   getAttendanceMap,
   saveAttendanceMap,
   subscribeToAttendance,
+  parseCalendarPropertyDateKey,
 } from "@/lib/client/attendanceStorage";
 import { FaCheck, FaTimes, FaCalendarAlt } from "react-icons/fa";
 
@@ -65,6 +66,8 @@ interface TimetableProps {
   roomId?: string;
   weekDays?: WeekDayInfo[];
   weekLabel?: string;
+  calendarStartKey?: string;
+  calendarEndKey?: string;
 }
 
 function getDefaultWeekDays(): WeekDayInfo[] {
@@ -89,10 +92,46 @@ function getDefaultWeekDays(): WeekDayInfo[] {
   return days;
 }
 
-export default function Timetable({ roomId = "67", weekDays, weekLabel }: TimetableProps) {
+export default function Timetable({
+  roomId = "67",
+  weekDays,
+  weekLabel,
+  calendarStartKey,
+  calendarEndKey,
+}: TimetableProps) {
   const [timetableData, setTimetableData] = useState<TimetableData>({});
   const [loading, setLoading] = useState(true);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, boolean>>({});
+  const [calStart, setCalStart] = useState<string>(calendarStartKey || "");
+  const [calEnd, setCalEnd] = useState<string>(calendarEndKey || "");
+
+  useEffect(() => {
+    if (calendarStartKey) setCalStart(calendarStartKey);
+    if (calendarEndKey) setCalEnd(calendarEndKey);
+  }, [calendarStartKey, calendarEndKey]);
+
+  useEffect(() => {
+    if (calendarStartKey && calendarEndKey) return;
+    async function fetchCalendarProps() {
+      try {
+        const snap = await getDoc(
+          doc(singletonFirestorePublic, "calendar", "properties")
+        );
+        if (snap.exists()) {
+          const d = snap.data();
+          if (!calendarStartKey && d["start-calendar"]) {
+            setCalStart(parseCalendarPropertyDateKey(d["start-calendar"], ""));
+          }
+          if (!calendarEndKey && d["end-calendar"]) {
+            setCalEnd(parseCalendarPropertyDateKey(d["end-calendar"], "", true));
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching calendar properties in Timetable:", err);
+      }
+    }
+    fetchCalendarProps();
+  }, [calendarStartKey, calendarEndKey]);
 
   // Active days for this week (default to current week if none provided)
   const activeWeekDays = useMemo(() => {
@@ -158,8 +197,12 @@ export default function Timetable({ roomId = "67", weekDays, weekLabel }: Timeta
 
   // Toggle period attendance for specific date
   const togglePeriod = (dateKey: string, periodIndex: number) => {
+    // Only allow interacting within [calStart, calEnd] and not in the future
+    if (calStart && dateKey < calStart) return;
+    if (calEnd && dateKey > calEnd) return;
+    if (dateKey > todayKey) return;
+
     const pKey = getPeriodKey(dateKey, periodIndex);
-    const isFuture = dateKey > todayKey;
 
     // Current state check
     let currentAttended = false;
@@ -182,6 +225,10 @@ export default function Timetable({ roomId = "67", weekDays, weekLabel }: Timeta
 
   // Quick action: set all periods of a day to attended or absent
   const setAllDayPeriods = (dayInfo: WeekDayInfo, attended: boolean) => {
+    if (calStart && dayInfo.dateKey < calStart) return;
+    if (calEnd && dayInfo.dateKey > calEnd) return;
+    if (dayInfo.dateKey > todayKey) return;
+
     const dayName = DAYS[dayInfo.dayOfWeek - 1];
     const periods = timetableData[dayName];
     const nextMap = { ...attendanceMap, [dayInfo.dateKey]: attended };
@@ -253,7 +300,10 @@ export default function Timetable({ roomId = "67", weekDays, weekLabel }: Timeta
           {activeWeekDays.map((dayInfo, dayIdx) => {
             const dayName = DAYS[dayInfo.dayOfWeek - 1];
             const isTodayRow = dayInfo.dateKey === todayKey;
-            const isFutureRow = dayInfo.dateKey > todayKey;
+            const isWithinRange =
+              (!calStart || dayInfo.dateKey >= calStart) &&
+              (!calEnd || dayInfo.dateKey <= calEnd);
+            const isFutureRow = dayInfo.dateKey > todayKey || !isWithinRange;
 
             // Calculate scheduled period indexes for this day
             const dayPeriods = timetableData[dayName]
@@ -381,7 +431,10 @@ export default function Timetable({ roomId = "67", weekDays, weekLabel }: Timeta
                       let isAttended = false;
                       let isDecided = false;
 
-                      if (attendanceMap[pKey] !== undefined) {
+                      if (!isWithinRange) {
+                        isAttended = false;
+                        isDecided = false;
+                      } else if (attendanceMap[pKey] !== undefined) {
                         isAttended = attendanceMap[pKey];
                         isDecided = true;
                       } else if (attendanceMap[dayInfo.dateKey] !== undefined) {
@@ -400,13 +453,15 @@ export default function Timetable({ roomId = "67", weekDays, weekLabel }: Timeta
 
                       // Cell background styling
                       let cellBgClass: string;
-                      if (isFutureRow && !isDecided) {
-                        cellBgClass = "bg-slate-100/80 text-slate-400 border border-slate-200/50 hover:bg-slate-200/70";
+                      if (!isWithinRange) {
+                        cellBgClass = "bg-slate-100/80 text-slate-400 border border-slate-200/50 cursor-not-allowed";
+                      } else if (isFutureRow && !isDecided) {
+                        cellBgClass = "bg-slate-100/80 text-slate-400 border border-slate-200/50 hover:bg-slate-200/70 cursor-pointer";
                       } else if (isAttended) {
-                        cellBgClass = "bg-emerald-400 hover:bg-emerald-500 text-white font-medium shadow-xs";
+                        cellBgClass = "bg-emerald-400 hover:bg-emerald-500 text-white font-medium shadow-xs cursor-pointer";
                       } else {
                         // Absent (default for past/today or explicitly marked)
-                        cellBgClass = "bg-rose-400 hover:bg-rose-500 text-white font-medium shadow-xs";
+                        cellBgClass = "bg-rose-400 hover:bg-rose-500 text-white font-medium shadow-xs cursor-pointer";
                       }
 
                       const todayPeriodBorder = isTodayRow ? "ring-1 ring-pink-300" : "";
@@ -414,14 +469,18 @@ export default function Timetable({ roomId = "67", weekDays, weekLabel }: Timeta
                       return (
                         <div
                           key={`period-${dayInfo.dateKey}-${colIdx}`}
-                          onClick={() => togglePeriod(dayInfo.dateKey, col.periodIndex!)}
-                          className={`p-2 text-[11px] rounded-xl flex flex-col justify-between gap-0.5 transition-all duration-150 leading-tight cursor-pointer select-none ${cellBgClass} ${todayPeriodBorder} hover:brightness-105 active:scale-[0.98] min-h-[64px]`}
+                          onClick={() => isWithinRange && togglePeriod(dayInfo.dateKey, col.periodIndex!)}
+                          className={`p-2 text-[11px] rounded-xl flex flex-col justify-between gap-0.5 transition-all duration-150 leading-tight select-none ${cellBgClass} ${todayPeriodBorder} ${
+                            isWithinRange ? "hover:brightness-105 active:scale-[0.98]" : ""
+                          } min-h-[64px]`}
                           title={
-                            isFutureRow && !isDecided
-                              ? "วันที่ยังมาไม่ถึง (คลิกเพื่อบันทึกล่วงหน้า)"
-                              : isAttended
-                                ? "มาเรียน (คลิกเพื่อเปลี่ยนเป็นขาด)"
-                                : "ขาดเรียน (คลิกเพื่อเปลี่ยนเป็นมา)"
+                            !isWithinRange
+                              ? "อยู่นอกช่วงเวลาภาคเรียน"
+                              : isFutureRow && !isDecided
+                                ? "วันที่ยังมาไม่ถึง (คลิกเพื่อบันทึกล่วงหน้า)"
+                                : isAttended
+                                  ? "มาเรียน (คลิกเพื่อเปลี่ยนเป็นขาด)"
+                                  : "ขาดเรียน (คลิกเพื่อเปลี่ยนเป็นมา)"
                           }
                         >
                           <div>

@@ -65,6 +65,8 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
   const [scheduledPeriodsByDay, setScheduledPeriodsByDay] = useState<Record<number, number[]>>({});
   const [nowMonth, setNowMonth] = useState<Day>({ day: 0, month: 0, year: 0 });
   const [allMonths, setAllMonths] = useState<Day[]>([]);
+  const [calendarStartKey, setCalendarStartKey] = useState<string>("");
+  const [calendarEndKey, setCalendarEndKey] = useState<string>("");
 
   // Modal State for isolated weekly timetable
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -144,6 +146,11 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
         if (!snap.exists()) return;
 
         const data = snap.data();
+        const startKey = parseCalendarPropertyDateKey(data["start-calendar"], "");
+        const endKey = parseCalendarPropertyDateKey(data["end-calendar"], "", true);
+        if (startKey) setCalendarStartKey(startKey);
+        if (endKey) setCalendarEndKey(endKey);
+
         const startDate = parseCalendarPropertyDate(data["start-calendar"], new Date());
         const endDate = parseCalendarPropertyDate(data["end-calendar"], new Date(), true);
 
@@ -316,7 +323,12 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
   };
 
   // Click on a past/today school day: only 2 states (มา <-> ขาด)
+  // Only allow interacting within [calendarStartKey, calendarEndKey]
   const handleDayClick = (cell: CalendarCell) => {
+    // Cannot interact outside calendar range
+    if (calendarStartKey && cell.dateKey < calendarStartKey) return;
+    if (calendarEndKey && cell.dateKey > calendarEndKey) return;
+
     // Future dates cannot be toggled into attendance
     if (cell.dateKey > todayKey) return;
 
@@ -332,7 +344,9 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
       scheduled,
       attendanceMap,
       false,
-      todayKey
+      todayKey,
+      calendarStartKey,
+      calendarEndKey
     );
 
     // Only 2 states: If currently attended -> switch to absent. If absent or partial -> switch to attended.
@@ -508,6 +522,10 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                         const isDayOff = !!dayOffCache[monthKey]?.[cell.day - 1];
                         const scheduled = scheduledPeriodsByDay[cell.dayOfWeek] || [];
 
+                        const isWithinCalendar =
+                          (!calendarStartKey || cell.dateKey >= calendarStartKey) &&
+                          (!calendarEndKey || cell.dateKey <= calendarEndKey);
+
                         // Compute state (future, attended, partial, absent, dayOff, weekend)
                         const status: DayStatus = getDayAttendanceStatus(
                           cell.dateKey,
@@ -515,13 +533,15 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                           scheduled,
                           attendanceMap,
                           isDayOff,
-                          todayKey
+                          todayKey,
+                          calendarStartKey,
+                          calendarEndKey
                         );
 
                         const isToday = cell.dateKey === todayKey;
                         const isPastOrToday = cell.dateKey <= todayKey;
                         const isSchoolDay = !isSunday && !isSaturday && !isDayOff;
-                        const isClickable = isSchoolDay && isPastOrToday;
+                        const isClickable = isSchoolDay && isPastOrToday && isWithinCalendar;
 
                         // Visual styling based on status
                         let cellClass: string;
@@ -529,7 +549,9 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
 
                         if (!cell.isInThisMonth) {
                           // Day belongs to neighboring month
-                          if (status === "attended") {
+                          if (!isWithinCalendar || status === "future") {
+                            cellClass = `bg-slate-50/50 ${isSunday ? "text-red-200" : "text-slate-300"}`;
+                          } else if (status === "attended") {
                             cellClass = "bg-emerald-300/60 text-white font-medium";
                             statusText = "มา";
                           } else if (status === "partial") {
@@ -550,9 +572,9 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                             cellClass = "bg-slate-50 text-red-500";
                           } else if (isSaturday) {
                             cellClass = "bg-slate-50 text-violet-800";
-                          } else if (status === "future") {
-                            // วันที่ยังมาไม่ถึงเป็นสีเทา
-                            cellClass = "bg-slate-100 text-slate-400 border border-slate-200/50 hover:bg-slate-200/70";
+                          } else if (!isWithinCalendar || status === "future") {
+                            // วันที่ยังมาไม่ถึง หรืออยู่นอกช่วงเวลาภาคเรียน เป็นสีเทา
+                            cellClass = "bg-slate-100 text-slate-400 border border-slate-200/50";
                           } else if (status === "attended") {
                             // เข้าเรียนครบทุกคาบ (เขียว)
                             cellClass = "bg-emerald-400 text-white font-semibold shadow-xs";
@@ -577,20 +599,23 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                           <div
                             key={globalIdx}
                             onClick={() => isClickable && handleDayClick(cell)}
-                            className={`h-12 px-1.5 py-1 rounded-xl flex flex-col justify-between text-xs transition-all ${cellClass} ${todayHighlightClass} ${isClickable ? "cursor-pointer select-none active:scale-95" : ""
-                              }`}
+                            className={`h-12 px-1.5 py-1 rounded-xl flex flex-col justify-between text-xs transition-all ${cellClass} ${todayHighlightClass} ${
+                              isClickable ? "cursor-pointer select-none active:scale-95" : "cursor-default select-none"
+                            }`}
                             title={
                               isToday
                                 ? "วันนี้"
-                                : status === "future"
-                                  ? "วันที่ยังมาไม่ถึง"
-                                  : status === "attended"
-                                    ? "มาเรียน (คลิกเพื่อเปลี่ยนเป็นขาด)"
-                                    : status === "partial"
-                                      ? "เข้าเรียนไม่ครบ (คลิกเพื่อเปลี่ยนเป็นมา หรือกด View เพื่อดูรายคาบ)"
-                                      : status === "absent"
-                                        ? "ขาดเรียน (คลิกเพื่อเปลี่ยนเป็นมา)"
-                                        : undefined
+                                : !isWithinCalendar
+                                  ? "อยู่นอกช่วงเวลาภาคเรียน"
+                                  : status === "future"
+                                    ? "วันที่ยังมาไม่ถึง"
+                                    : status === "attended"
+                                      ? "มาเรียน (คลิกเพื่อเปลี่ยนเป็นขาด)"
+                                      : status === "partial"
+                                        ? "เข้าเรียนไม่ครบ (คลิกเพื่อเปลี่ยนเป็นมา หรือกด View เพื่อดูรายคาบ)"
+                                        : status === "absent"
+                                          ? "ขาดเรียน (คลิกเพื่อเปลี่ยนเป็นมา)"
+                                          : undefined
                             }
                           >
                             <div className="flex items-center justify-between w-full">
@@ -698,6 +723,8 @@ export default function Calendar({ roomId = "67" }: CalendarProps) {
                 roomId={roomId}
                 weekDays={selectedWeek.days}
                 weekLabel={selectedWeek.label}
+                calendarStartKey={calendarStartKey}
+                calendarEndKey={calendarEndKey}
               />
             </div>
           </div>

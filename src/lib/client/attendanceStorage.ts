@@ -167,10 +167,20 @@ export function getDayAttendanceStatus(
   scheduledPeriods: number[],
   attendanceMap: Record<string, boolean>,
   isDayOff: boolean,
-  todayKey: string
+  todayKey: string,
+  calendarStartKey?: string,
+  calendarEndKey?: string
 ): DayStatus {
   if (isDayOff) return "dayOff";
   if (dayOfWeek === 0 || dayOfWeek === 6) return "weekend";
+
+  // If outside calendar range [start, end], treat as future / not reached (gray)
+  if (calendarStartKey && dateKey < calendarStartKey) {
+    return "future";
+  }
+  if (calendarEndKey && dateKey > calendarEndKey) {
+    return "future";
+  }
 
   const isFuture = dateKey > todayKey;
   if (isFuture) {
