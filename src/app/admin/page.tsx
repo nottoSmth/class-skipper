@@ -11,8 +11,15 @@ import { getFirestoreDB } from "@/lib/server/server.firebaseInterface";
 import TimetableEditor from "./_components/TimetableEditor";
 import CalendarEditor from "./_components/CalendarEditor";
 import DayOffEditor from "./_components/DayOffEditor";
+import UserEditor from "./_components/UserEditor";
 
-export default async function AdminPage() {
+interface PageProps {
+  searchParams: Promise<{ tab?: string }>;
+}
+
+export default async function AdminPage({ searchParams }: PageProps) {
+  const params = await searchParams;
+  const currentTab = params.tab || "timetable";
   const user = await getSessionUser();
 
   // Not logged in → redirect to login
@@ -100,9 +107,48 @@ export default async function AdminPage() {
         </div>
       </header>
 
+      {isAdmin && (
+        <div className="bg-white border-b border-slate-200 sticky top-0 z-10">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6">
+            <nav className="flex space-x-6">
+              <Link
+                href="?tab=timetable"
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  currentTab === "timetable"
+                    ? "border-pink-500 text-pink-600"
+                    : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
+                }`}
+              >
+                ตารางเรียน
+              </Link>
+              <Link
+                href="?tab=users"
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  currentTab === "users"
+                    ? "border-emerald-500 text-emerald-600"
+                    : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
+                }`}
+              >
+                จัดการผู้ใช้งาน
+              </Link>
+              <Link
+                href="?tab=calendar"
+                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  currentTab === "calendar"
+                    ? "border-blue-500 text-blue-600"
+                    : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
+                }`}
+              >
+                วันเปิด-ปิด / วันหยุด
+              </Link>
+            </nav>
+          </div>
+        </div>
+      )}
+
       <main className="max-w-6xl mx-auto py-8 px-4 sm:px-6 space-y-8">
         {/* === Section: Calendar Dates (admin only) === */}
-        {isAdmin && (
+        {isAdmin && currentTab === "calendar" && (
           <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="bg-gradient-to-r from-blue-500 to-indigo-500 px-6 py-4">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -125,7 +171,7 @@ export default async function AdminPage() {
         )}
 
         {/* === Section: Day Off (admin only) === */}
-        {isAdmin && (
+        {isAdmin && currentTab === "calendar" && (
           <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
             <div className="bg-gradient-to-r from-violet-500 to-purple-500 px-6 py-4">
               <h2 className="text-base font-bold text-white flex items-center gap-2">
@@ -148,8 +194,29 @@ export default async function AdminPage() {
           </section>
         )}
 
+        {/* === Section: User Management (admin only) === */}
+        {isAdmin && currentTab === "users" && (
+          <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="bg-gradient-to-r from-emerald-500 to-teal-500 px-6 py-4">
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                </svg>
+                จัดการผู้ใช้งาน (Users)
+              </h2>
+              <p className="text-xs text-emerald-100 mt-0.5">
+                เพิ่ม ลบ และกำหนดสิทธิ์ผู้ใช้งาน
+              </p>
+            </div>
+            <div className="p-6">
+              <UserEditor allRoomIds={allRoomIds} />
+            </div>
+          </section>
+        )}
+
         {/* === Section: Timetable Editor (admin + privileged) === */}
-        <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+        {(!isAdmin || currentTab === "timetable") && (
+          <section className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="bg-gradient-to-r from-pink-500 to-rose-500 px-6 py-4">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -171,6 +238,7 @@ export default async function AdminPage() {
             />
           </div>
         </section>
+        )}
       </main>
     </div>
   );

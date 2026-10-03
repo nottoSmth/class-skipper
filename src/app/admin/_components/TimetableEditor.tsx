@@ -17,14 +17,17 @@ interface TimetableEditorProps {
   roomId: string;
   allRoomIds: string[];
   canSwitchRoom: boolean;
+  onRoomsChange?: (newRooms: string[]) => void;
 }
 
 export default function TimetableEditor({
   roomId: initialRoomId,
-  allRoomIds,
+  allRoomIds: initialAllRoomIds,
   canSwitchRoom,
+  onRoomsChange,
 }: TimetableEditorProps) {
   const [roomId, setRoomId] = useState(initialRoomId);
+  const [allRoomIds, setAllRoomIds] = useState(initialAllRoomIds);
   const [timetable, setTimetable] = useState<TimetableData>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -95,6 +98,57 @@ export default function TimetableEditor({
     }
   };
 
+  const handleAddRoom = async () => {
+    const newRoomId = prompt("ใส่ชื่อห้องที่ต้องการเพิ่ม:");
+    if (!newRoomId) return;
+    if (allRoomIds.includes(newRoomId)) {
+      showToast("ห้องนี้มีอยู่แล้ว");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/admin/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roomId: newRoomId }),
+      });
+      if (!res.ok) throw new Error("Failed to add room");
+      const newRooms = [...allRoomIds, newRoomId].sort();
+      setAllRoomIds(newRooms);
+      setRoomId(newRoomId);
+      if (onRoomsChange) onRoomsChange(newRooms);
+      showToast("เพิ่มห้องสำเร็จ ✓");
+    } catch (err) {
+      console.error(err);
+      showToast("เพิ่มห้องล้มเหลว");
+    }
+  };
+
+  const handleDeleteRoom = async () => {
+    if (!roomId) return;
+    if (!confirm(`คุณแน่ใจหรือไม่ว่าต้องการลบห้อง ${roomId}?`)) return;
+
+    try {
+      const res = await fetch(`/api/admin/rooms?roomId=${roomId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete room");
+      const newRooms = allRoomIds.filter(r => r !== roomId);
+      setAllRoomIds(newRooms);
+      if (newRooms.length > 0) {
+        setRoomId(newRooms[0]);
+      } else {
+        setRoomId("");
+        setTimetable({});
+      }
+      if (onRoomsChange) onRoomsChange(newRooms);
+      showToast("ลบห้องสำเร็จ ✓");
+    } catch (err) {
+      console.error(err);
+      showToast("ลบห้องล้มเหลว");
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Room Selector (admin only) */}
@@ -112,6 +166,19 @@ export default function TimetableEditor({
               </option>
             ))}
           </select>
+          <button
+            onClick={handleAddRoom}
+            className="px-3 py-1.5 text-xs font-bold bg-pink-50 text-pink-600 rounded-lg hover:bg-pink-100 transition-colors border border-pink-200 cursor-pointer"
+          >
+            + เพิ่มห้อง
+          </button>
+          <button
+            onClick={handleDeleteRoom}
+            disabled={!roomId}
+            className="px-3 py-1.5 text-xs font-bold bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors border border-red-200 disabled:opacity-50 cursor-pointer"
+          >
+            ลบห้องนี้
+          </button>
         </div>
       )}
 
