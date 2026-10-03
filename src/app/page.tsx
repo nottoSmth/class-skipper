@@ -6,35 +6,37 @@ import Calendar from "@/lib/client/components/Calendar";
 import AbsenceCalculator from "@/lib/client/components/AbsenceCalculator";
 import { Header } from "@/lib/client/components/Components";
 import { doc, getDoc } from "firebase/firestore";
-import { singletonFirestorePublic } from "@/lib/client/singleton/client.firebasePublic";
+import { singletonFirestore } from "@/lib/client/singleton/client.firebaseAuth";
+import { useFirebaseContext } from "@/lib/client/context/firebaseContext";
+
+function getStoredUsername(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = localStorage.getItem("userData");
+    if (!stored) return null;
+    const parsed = JSON.parse(stored);
+    return parsed?.username ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export default function Home() {
+  // Detect login state synchronously from localStorage — avoids a flash
+  const [loggedInUsername] = useState<string | null>(() => getStoredUsername());
+
   const [selectedRoom, setSelectedRoom] = useState("67");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { isFirebaseReady } = useFirebaseContext();
 
+  // Fetch the user's assigned room only after Firebase auth is ready
+  // (Firestore rules: allow read if request.auth.uid == userId)
   useEffect(() => {
+    if (!isFirebaseReady || !loggedInUsername) return;
+
     async function loadUserRoom() {
-      if (typeof window === "undefined") return;
-
-      const stored = localStorage.getItem("userData");
-      if (!stored) {
-        setIsLoggedIn(false);
-        return;
-      }
-
-      let userData: { username: string };
-      try {
-        userData = JSON.parse(stored);
-      } catch {
-        setIsLoggedIn(false);
-        return;
-      }
-
-      setIsLoggedIn(true);
-
       try {
         const userDoc = await getDoc(
-          doc(singletonFirestorePublic, "users", userData.username)
+          doc(singletonFirestore, "users", loggedInUsername!)
         );
         if (userDoc.exists()) {
           const data = userDoc.data();
@@ -48,7 +50,9 @@ export default function Home() {
     }
 
     loadUserRoom();
-  }, []);
+  }, [isFirebaseReady, loggedInUsername]);
+
+  const isLoggedIn = loggedInUsername !== null;
 
   return (
     <div className="min-h-screen bg-slate-50/40">

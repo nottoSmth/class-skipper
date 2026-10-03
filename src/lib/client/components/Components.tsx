@@ -1,5 +1,3 @@
-"use client"
-
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -9,6 +7,7 @@ import { useFirebaseContext } from "@/lib/client/context/firebaseContext";
 
 type UserData = {
     username: string;
+    role?: string;
 };
 
 export function Header() {
@@ -88,6 +87,15 @@ export function Header() {
                                         {userData.username}
                                     </p>
                                 </div>
+
+                                {(userData.role === "admin" || userData.role === "privileged") && (
+                                    <Link
+                                        href="/admin"
+                                        className="block px-4 py-3 text-gray-700 hover:bg-pink-100 font-medium"
+                                    >
+                                        Admin Panel
+                                    </Link>
+                                )}
 
                                 <Link
                                     href="/settings"

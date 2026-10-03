@@ -28,6 +28,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const userData = userDoc.data();
+    const role = userData?.role || "user";
+
     const authDoc = await db
       .collection("users")
       .doc(username)
@@ -62,7 +65,7 @@ export async function POST(req: NextRequest) {
       .sign(secretKey);
 
     const response = NextResponse.json(
-      { username: username },
+      { username: username, role: role },
       { status: 200, }
     );
     response.cookies.set("session", token, {
